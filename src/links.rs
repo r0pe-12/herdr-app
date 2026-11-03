@@ -111,6 +111,48 @@ pub fn resolve(link: &str, cwd: Option<&Path>) -> Option<Target> {
     Path::new(bare).exists().then(|| Target::File(PathBuf::from(bare)))
 }
 
+/// A link Herdr opens itself, in its Files panel: an existing local file (a
+/// path, or a `file://` URL on this machine) of at most 1 MiB with no NUL in
+/// its first 8 KiB. Folders, binaries, larger files and other URLs go to the system.
+pub fn local_text_file(target: &Target) -> Option<PathBuf> {
+    use std::io::Read;
+    let path = match target {
+        Target::File(path) => path.clone(),
+        Target::Url(url) => file_url_path(url)?,
+    };
+    let meta = std::fs::metadata(&path).ok()?;
+    if !meta.is_file() || meta.len() > crate::mod_files::LIMIT {
+        return None;
+    }
+    let mut head = [0u8; 8192];
+    let read = std::fs::File::open(&path).ok()?.read(&mut head).ok()?;
+    (!head[..read].contains(&0)).then_some(path)
+}
+
+/// The path of a `file://` URL naming this machine (no host, or `localhost`),
+/// percent-decoded, without a query or fragment.
+fn file_url_path(url: &str) -> Option<PathBuf> {
+    let rest = url.strip_prefix("file://")?;
+    let path = rest.strip_prefix("localhost").unwrap_or(rest);
+    if !path.starts_with('/') {
+        return None;
+    }
+    let path = path.split(['?', '#']).next()?.as_bytes();
+    let mut bytes = Vec::with_capacity(path.len());
+    let mut i = 0;
+    while i < path.len() {
+        if path[i] == b'%' {
+            let hex = std::str::from_utf8(path.get(i + 1..i + 3)?).ok()?;
+            bytes.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            bytes.push(path[i]);
+            i += 1;
+        }
+    }
+    Some(PathBuf::from(String::from_utf8(bytes).ok()?))
+}
+
 /// Hands the target to the system (xdg-open, open on macOS, explorer on Windows).
 pub fn open(target: &Target) {
     let arg = match target {
@@ -328,6 +370,30 @@ mod tests {
             std::fs::write(&dotted, "").unwrap();
             assert_eq!(resolve("src/main.rs.", Some(&dir)), Some(Target::File(dotted)));
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn only_local_text_files_open_in_herdr() {
+        let dir = std::env::temp_dir().join(format!("herdr-links-text-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("sub folder")).unwrap();
+        let text = dir.join("sub folder/.env");
+        std::fs::write(&text, "DB_HOST=127.0.0.1\n").unwrap();
+        let binary = dir.join("logo.png");
+        std::fs::write(&binary, b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR").unwrap();
+        let big = dir.join("big.log");
+        std::fs::write(&big, vec![b'a'; crate::mod_files::LIMIT as usize + 1]).unwrap();
+        assert_eq!(local_text_file(&Target::File(text.clone())), Some(text.clone()));
+        assert_eq!(local_text_file(&Target::File(dir.join("sub folder"))), None);
+        assert_eq!(local_text_file(&Target::File(binary)), None);
+        assert_eq!(local_text_file(&Target::File(big)), None);
+        assert_eq!(local_text_file(&Target::File(dir.join("gone.txt"))), None);
+        let url = format!("file://{}", text.to_str().unwrap().replace(' ', "%20"));
+        assert_eq!(local_text_file(&Target::Url(url.clone())), Some(text.clone()));
+        assert_eq!(local_text_file(&Target::Url(url.replacen("file://", "file://localhost", 1))), Some(text.clone()));
+        assert_eq!(local_text_file(&Target::Url(url.replacen("file://", "file://example.com", 1))), None);
+        assert_eq!(local_text_file(&Target::Url(format!("{url}#L3"))), Some(text));
+        assert_eq!(local_text_file(&Target::Url("https://example.com/.env".into())), None);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

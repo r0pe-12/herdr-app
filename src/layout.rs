@@ -602,6 +602,34 @@ impl Node {
         true
     }
 
+    /// The `layout.select` and `layout.show` commands that make the first block
+    /// showing mod `name` visible: its stack parents pick it, hidden ancestors show.
+    pub fn reveal_mod(&self, name: &str) -> Option<Vec<(&'static str, Value)>> {
+        fn path<'a>(node: &'a Node, name: &str, out: &mut Vec<&'a Node>) -> bool {
+            out.push(node);
+            if matches!(node.content(), Some(Content::Mod { name: n, .. }) if n == name)
+                || node.children().iter().any(|c| path(c, name, out))
+            {
+                return true;
+            }
+            out.pop();
+            false
+        }
+        let mut nodes = Vec::new();
+        if !path(self, name, &mut nodes) {
+            return None;
+        }
+        let mut steps = Vec::new();
+        for pair in nodes.windows(2) {
+            let (parent, child) = (pair[0], pair[1]);
+            if matches!(parent.kind, Kind::Stack { .. }) && parent.active_child().map(|c| c.id.as_str()) != Some(child.id.as_str()) {
+                steps.push(("layout.select", serde_json::json!({ "stack": parent.id, "child": child.id })));
+            }
+        }
+        steps.extend(nodes.iter().filter(|n| n.hidden).map(|n| ("layout.show", serde_json::json!({ "id": n.id }))));
+        Some(steps)
+    }
+
     /// Makes `child` the visible child of `stack`.
     pub fn select(&mut self, stack: &str, child: &str) -> bool {
         if let Some(s) = self.find_mut(stack)
@@ -782,6 +810,25 @@ mod tests {
         assert_eq!((f.radius, f.gap, h.height), (Some(10.0), Some(8.0), Some(28.0)));
         let back: Node = serde_json::from_str(&serde_json::to_string(&n).unwrap()).unwrap();
         assert_eq!(back, n);
+    }
+
+    #[test]
+    fn revealing_a_mod_selects_its_stack_child_and_shows_hidden_ancestors() {
+        let json = r#"{ "id": "root", "type": "row", "children": [
+          { "id": "main", "type": "block", "content": {"tab": "active"} },
+          { "id": "panel", "type": "column", "hidden": true, "children": [
+            { "id": "panel-body", "type": "stack", "active": "changes", "children": [
+              { "id": "files", "type": "block", "content": {"mod": "files"} },
+              { "id": "changes", "type": "block", "content": {"mod": "changes"} } ] } ] } ] }"#;
+        let n: Node = serde_json::from_str(json).unwrap();
+        assert_eq!(n.reveal_mod("files"), Some(vec![
+            ("layout.select", serde_json::json!({ "stack": "panel-body", "child": "files" })),
+            ("layout.show", serde_json::json!({ "id": "panel" })),
+        ]));
+        assert_eq!(n.reveal_mod("changes"), Some(vec![("layout.show", serde_json::json!({ "id": "panel" }))]));
+        assert_eq!(n.reveal_mod("spaces"), None);
+        let main: Node = serde_json::from_str(include_str!("../defaults/layouts/main.json")).unwrap();
+        assert!(main.reveal_mod("files").is_some_and(|steps| steps.contains(&("layout.show", serde_json::json!({ "id": "panel" })))));
     }
 
     #[test]

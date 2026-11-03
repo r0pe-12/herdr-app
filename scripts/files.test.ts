@@ -91,6 +91,7 @@ test("Files follows directory links one level at a time", async () => {
 
 const kindsSource = source.slice(source.indexOf("// File kinds:"), source.indexOf("async function directory("));
 const fileKind = new Function(`${kindsSource}; return fileKind;`)();
+const displayPath = new Function(`${kindsSource}; return displayPath;`)();
 
 test("Files picks language and line comment by file name", () => {
   expect(fileKind(".env")).toEqual({ language: "env", comment: "#" });
@@ -104,12 +105,20 @@ test("Files picks language and line comment by file name", () => {
   expect(fileKind("data.json")).toEqual({ language: "json", comment: null });
 });
 
+test("Files shows a path below the folder, else from home", () => {
+  expect(displayPath("src/a.ts", "/p", "/Users/me")).toBe("src/a.ts");
+  expect(displayPath("/p/src/a.ts", "/p", "/Users/me")).toBe("src/a.ts");
+  expect(displayPath("/Users/me/.config/x/.env", "/p", "/Users/me")).toBe("~/.config/x/.env");
+  expect(displayPath("/etc/hosts", "/p", "/Users/me")).toBe("/etc/hosts");
+});
+
 // The panel class run against fakes: a fake disk, a fake editor and a movable focused folder.
 function panel() {
-  const state = { cwd: "/a", disk: "old", release: null as null | (() => void) };
+  const state = { cwd: "/a", machine: null as null | string, disk: "old", release: null as null | (() => void),
+    reads: [] as [string, string | null][], writes: [] as string[], shared: {} as Record<string, unknown> };
   const editors: any[] = [];
   const body = source.slice(source.indexOf("function location()")).replace("export default class Files extends View", "return class Files extends View");
-  const names = ["View", "div", "svg", "v_flex", "h_flex", "Editor", "EditorState", "spaces", "panes", "focused", "exec", "readTextFile", "writeTextFile", "nextCommand", "watchFolder", "theme", "settings", "window"];
+  const names = ["View", "div", "svg", "v_flex", "h_flex", "Editor", "EditorState", "spaces", "panes", "focused", "exec", "readTextFile", "writeTextFile", "nextCommand", "watchFolder", "theme", "settings", "window", "home", "shared", "setShared"];
   const stub: Record<string, unknown> = {
     View: class {},
     EditorState: { new: ({ value }: { value: string }) => {
@@ -117,9 +126,11 @@ function panel() {
       editors.push(editor);
       return editor;
     } },
-    spaces: () => [{ active: true, id: state.cwd, folder: state.cwd }], panes: () => [], focused: () => null,
-    exec: async () => ({ code: 0, stdout: "", stderr: "" }), readTextFile: async () => state.disk,
-    writeTextFile: async (_p: string, value: string) => { await new Promise<void>(r => { state.release = r; }); state.disk = value; },
+    spaces: () => [{ active: true, id: state.cwd, folder: state.cwd, machine: state.machine }], panes: () => [], focused: () => null,
+    exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+    readTextFile: async (p: string, o?: { on?: string | null }) => { state.reads.push([p, o?.on ?? null]); return state.disk; },
+    writeTextFile: async (p: string, value: string) => { state.writes.push(p); await new Promise<void>(r => { state.release = r; }); state.disk = value; },
+    home: () => "/Users/me", shared: (k: string) => state.shared[k], setShared: (k: string, v: unknown) => { state.shared[k] = v; },
     nextCommand: () => new Promise(() => {}), watchFolder: () => new Promise(() => {}),
     theme: () => ({}), settings: () => ({}), window: () => ({ platform: "linux" }),
   };
@@ -174,4 +185,51 @@ test("Files reload applies the same text rules as opening a file", async () => {
   await flush();
   expect(files.editable).toBe(false);
   expect(editors.at(-1).v.endsWith("(file truncated)")).toBe(true);
+});
+
+test("Files opens a clicked file on this machine and keeps unsaved edits first", async () => {
+  const { files, cx, state, editors, flush } = panel();
+  state.machine = "vps"; files.refresh(cx);
+  await flush();
+  state.shared["files.open"] = { path: "/Users/me/notes/.env" };
+  files.takeOpenRequest(cx);
+  await flush();
+  expect(state.shared["files.open"]).toBe(null);
+  expect(files.file).toBe("/Users/me/notes/.env");
+  expect(state.reads.at(-1)).toEqual(["/Users/me/notes/.env", null]);
+  expect(files.editable).toBe(true);
+  editors.at(-1).v = "edited"; editors.at(-1).fire();
+  state.shared["files.open"] = { path: "/Users/me/other.txt" };
+  files.takeOpenRequest(cx);
+  await flush();
+  expect(files.file).toBe("/Users/me/notes/.env");
+  expect(files.leaving).toBe(true);
+  files.leave(cx);
+  await flush();
+  expect(files.file).toBe("/Users/me/other.txt");
+  expect(files.leaving).toBe(false);
+  editors.at(-1).v = "saved"; editors.at(-1).fire();
+  files.save(cx);
+  await flush();
+  expect(state.writes.at(-1)).toBe("/Users/me/other.txt");
+  state.release!(); await flush();
+  expect(files.dirty).toBe(false);
+});
+
+test("Files still opens a parked link when the click also moves to another folder", async () => {
+  const { files, cx, state, editors, flush } = panel();
+  await flush();
+  files.show("f.txt", cx);
+  await flush();
+  editors.at(-1).v = "edited"; editors.at(-1).fire();
+  state.shared["files.open"] = { path: "/Users/me/notes/.env" };
+  files.takeOpenRequest(cx);
+  expect(files.leaving).toBe(true);
+  state.cwd = "/b"; files.refresh(cx);
+  await flush();
+  expect(files.file).toBe("/Users/me/notes/.env");
+  state.cwd = "/a"; files.refresh(cx);
+  await flush();
+  expect(files.file).toBe("f.txt");
+  expect(files.dirty).toBe(true);
 });

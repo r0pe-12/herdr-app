@@ -1,7 +1,7 @@
 // A lazy file browser for the focused pane's folder: bounded previews, and local text files can be edited and saved.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
-import { spaces, panes, focused, exec, readTextFile, writeTextFile, nextCommand, watchFolder, theme, settings, window } from "herdr";
+import { spaces, panes, focused, exec, readTextFile, writeTextFile, nextCommand, watchFolder, theme, settings, window, home, shared, setShared } from "herdr";
 
 function location() {
   const space = spaces().find(s => s.active), f = focused();
@@ -23,6 +23,15 @@ function fileKind(path) {
   if (name === ".env" || name.startsWith(".env.") || name.endsWith(".env")) return { language: "env", comment: "#" };
   const ext = name.includes(".") ? name.split(".").pop().toLowerCase() : "txt";
   return { language: LANG[ext] ?? ext, comment: COMMENT[name] ?? COMMENT[ext] ?? null };
+}
+// Tree files are relative to the folder; a clicked link gives an absolute path on this machine.
+const absolute = path => /^([\\/]|[A-Za-z]:[\\/])/.test(path);
+// Where a file is, as the header shows it: below the folder, else from home.
+function displayPath(file, root, home) {
+  if (!absolute(file)) return file;
+  if (root && file.startsWith(root + "/")) return file.slice(root.length + 1);
+  if (home && file.startsWith(home + "/")) return "~/" + file.slice(home.length + 1);
+  return file;
 }
 const PER_FOLDER = 500, TOTAL = 5000;
 
@@ -47,7 +56,7 @@ async function directory(path, on) {
 
 export default class Files extends View {
   init(_props, cx) {
-    this.saved = new Map(); this.text = ""; this.dirty = false; this.editable = false; this.saving = false; this.saveError = null; this.conflict = false; this.leaving = false;
+    this.saved = new Map(); this.text = ""; this.dirty = false; this.editable = false; this.saving = false; this.saveError = null; this.conflict = false; this.leaving = false; this.pendingOpen = null;
     this.entries = new Map(); this.folders = new Set(); this.pending = new Set(); this.marks = {};
     this.refresh(cx);
     cx.timer.every(10000, cx => this.refresh(cx));
@@ -86,14 +95,17 @@ export default class Files extends View {
         this.saved.set(this.context.key, { folders: this.folders, file: this.file, ...keep });
         if (keep.code) this.code = null;
       }
-      const saved = this.saved.get(next);
+      // A link parked behind unsaved edits still opens here: the folder switch keeps those edits.
+      const parked = this.pendingOpen, saved = this.saved.get(next);
       this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.folders = new Set(saved?.folders);
       this.pending = new Set(); this.marks = {}; this.show(null); this.watched = null; this.error = null; this.limited = false;
       this.loading = false;
       if (saved?.code) {
         this.file = saved.file; this.code = saved.code; this.text = saved.text; this.editable = saved.editable; this.dirty = true; this.saving = Boolean(saved.saving);
         this.saved.set(next, { folders: saved.folders, file: saved.file });
-      } else if (saved?.file) this.show(saved.file, cx);
+      } else if (saved?.file && !parked) this.show(saved.file, cx);
+      if (parked && this.dirty) { this.pendingOpen = parked; this.leaving = true; }
+      else if (parked) this.show(parked, cx);
     }
     if (!cwd || this.loading) return;
     const context = this.context;
@@ -119,8 +131,8 @@ export default class Files extends View {
         this.marks = marks; this.error = null; this.watch(cwd, cx);
         // A file changed on disk shows its new text, but never over unsaved edits (also checked after the read).
         if (this.file && this.code && !this.dirty) {
-          const code = this.code, file = this.file;
-          const text = await readTextFile(`${cwd}/${file}`, { on }).catch(() => null);
+          const code = this.code, file = this.file, at = this.where(file);
+          const text = await readTextFile(at.file, { on: at.on }).catch(() => null);
           if (this.current(context) && this.file === file && this.code === code && !this.dirty
             && text !== null && !text.includes("\0") && text !== this.text && !(this.editable && text.length > 400000)) {
             this.text = text;
@@ -155,12 +167,12 @@ export default class Files extends View {
 
   show(path, cx) {
     this.code?.release(); this.code = null; this.file = path; this.fileError = null;
-    this.text = ""; this.dirty = false; this.editable = false; this.saving = false; this.saveError = null; this.conflict = false; this.leaving = false;
+    this.text = ""; this.dirty = false; this.editable = false; this.saving = false; this.saveError = null; this.conflict = false; this.leaving = false; this.pendingOpen = null;
     if (!path || !cx) return;
-    const context = this.context, root = this.root, on = this.on;
+    const context = this.context, { file: full, on } = this.where(path);
     cx.spawn(async cx => {
       try {
-        const text = await readTextFile(`${root}/${path}`, { on });
+        const text = await readTextFile(full, { on });
         if (this.file !== path || !this.current(context)) return;
         if (text === null) { this.fileError = "This file is no longer available"; return; }
         if (text.includes("\0")) { this.fileError = "Binary file · no text preview"; return; }
@@ -181,14 +193,35 @@ export default class Files extends View {
     });
   }
 
+  // A tree file is in the shown folder, on its machine; an absolute path (a clicked link) is on this machine.
+  where(path) {
+    return absolute(path) ? { file: path, on: null } : { file: `${this.root}/${path}`, on: this.on };
+  }
+
+  // A clicked link asks through shared "files.open"; the copy that sees it first takes it.
+  takeOpenRequest(cx) {
+    const path = shared("files.open")?.path;
+    if (!path) return;
+    setShared("files.open", null);
+    if (path === this.file) return;
+    if (this.dirty) { this.pendingOpen = path; this.leaving = true; }
+    else this.show(path, cx);
+  }
+
+  // Leaves the unsaved file for the one a link asked for, or for the list.
+  leave(cx) {
+    const next = this.pendingOpen;
+    this.show(next ?? null, next ? cx : undefined);
+  }
+
   // Writes only over the text last loaded or saved; `after` runs when that succeeded and nothing newer was typed.
   save(cx, after) {
     if (!this.code || !this.editable || !this.dirty || this.saving) return;
-    const code = this.code, file = this.file, value = code.value(), expected = this.text;
+    const code = this.code, file = this.file, value = code.value(), expected = this.text, target = this.where(file).file;
     this.saving = true; this.saveError = null; this.conflict = false;
     cx.spawn(async cx => {
       try {
-        await writeTextFile(`${this.root}/${file}`, value, expected);
+        await writeTextFile(target, value, expected);
         // Another folder is shown: its kept entry takes the saved text, and the editor is dropped when clean.
         const kept = this.code === code ? null : [...this.saved.values()].find(s => s.code === code);
         if (kept) {
@@ -196,7 +229,7 @@ export default class Files extends View {
           if (code.value() === value) { code.release(); delete kept.code; }
         } else if (this.code === code) {
           this.text = value; this.dirty = code.value() !== value; this.saveError = null; this.conflict = false;
-          if (!this.dirty) after?.();
+          if (!this.dirty) after?.(cx);
         }
       } catch (e) {
         if (this.code === code) {
@@ -213,11 +246,11 @@ export default class Files extends View {
 
   // Replaces the editor's text with the file on disk, dropping unsaved edits.
   reload(cx) {
-    const code = this.code, file = this.file, context = this.context;
+    const code = this.code, file = this.file, context = this.context, at = file && this.where(file);
     if (!code || !file) return;
     cx.spawn(async cx => {
       try {
-        const text = await readTextFile(`${this.root}/${file}`, { on: this.on });
+        const text = await readTextFile(at.file, { on: at.on });
         if (this.code === code && this.current(context) && (text === null || text.includes("\0") || text.length > 400000)) this.show(file, cx);
         else if (this.code === code && this.current(context)) {
           this.text = text; code.set_value(text); this.dirty = false; this.saveError = null; this.conflict = false;
@@ -245,21 +278,22 @@ export default class Files extends View {
 
   render(cx) {
     if (key() !== this.context?.key) this.refresh(cx);
+    this.takeOpenRequest(cx);
     const t = theme();
     const button = (id, label, run) => h_flex().id(id).h(24).px(8).flex_none().items_center().rounded(6).cursor_pointer().text_size(12).text_color(t.muted)
       .hover(s => s.bg(t.hover)).on_click((_e, cx) => { run(cx); cx.notify(); }).child(label);
     return v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
-        .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => { if (this.dirty) this.leaving = true; else this.show(null); cx.notify(); }).child("←")))
+        .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => { if (this.dirty) { this.leaving = true; this.pendingOpen = null; } else this.show(null); cx.notify(); }).child("←")))
         .child(div().font_semibold().child("Files"))
         .when(Boolean(this.file) && this.dirty, el => el.child(div().flex_none().text_color(t.blocked).child("●")))
-        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.file ?? this.root?.split(/[\\/]/).pop() ?? ""))
+        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.file ? displayPath(this.file, this.root, home()) : this.root?.split(/[\\/]/).pop() ?? ""))
         .when(Boolean(this.file) && this.dirty && this.editable, el => el.child(button("files-save", this.saving ? "Saving…" : "Save", cx => this.save(cx)))))
       .when(Boolean(this.file) && this.leaving, el => el.child(h_flex().flex_none().px(14).py(6).gap(8).items_center().border_b(1).border_color(t.border)
         .child(div().flex_1().min_w(0).truncate().text_size(12).child("Unsaved changes"))
-        .child(button("files-leave-save", "Save", cx => this.save(cx, () => this.show(null))))
-        .child(button("files-leave-discard", "Discard", () => this.show(null)))
-        .child(button("files-leave-cancel", "Cancel", () => { this.leaving = false; }))))
+        .child(button("files-leave-save", "Save", cx => this.save(cx, cx => this.leave(cx))))
+        .child(button("files-leave-discard", "Discard", cx => this.leave(cx)))
+        .child(button("files-leave-cancel", "Cancel", () => { this.leaving = false; this.pendingOpen = null; }))))
       .when(Boolean(this.file) && Boolean(this.saveError), el => el.child(h_flex().flex_none().px(14).py(6).gap(8).items_center().border_b(1).border_color(t.border)
         .child(div().id("files-error").flex_1().min_w(0).text_size(12).text_color(t.ansi1).child(this.saveError))
         .when(this.conflict, el => el.child(button("files-reload", "Reload", cx => this.reload(cx))))))

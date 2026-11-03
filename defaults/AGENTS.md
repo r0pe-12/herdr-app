@@ -1,4 +1,4 @@
-# Herdr app
+`# Herdr app
 
 <!-- Written by the Herdr app on every start. Edits here are overwritten. -->
 
@@ -187,6 +187,11 @@ comments or uncomments the selected lines of files whose type has a comment
 sign. Unsaved edits show a dot and survive switching folders; going back to the
 list asks Save, Discard or Cancel. An older `keys.json` needs
 `"mod:files": { "cmd-s": "files.save" }` added by hand.
+Cmd-click (Ctrl-click) on a path or `file://` link to a local text file in a
+terminal opens it there, showing the panel if it's hidden; add Shift to open
+it with the system's app. Folders, binary files, files over 1 MiB, other URLs
+and layouts without a `files` block still go to the system. A mod asks the
+same with `setShared("files.open", { path })` (an absolute path on this computer).
 
 **Herdr's own layouts and mods are read-only.** They are replaced whole
 on every start. Use settings.json for look (fonts, sizes, theme, colors,
