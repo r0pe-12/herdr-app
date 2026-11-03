@@ -179,6 +179,14 @@ writing a new file. The Files panel supports Windows folder paths with spaces,
 parentheses and apostrophes, and preserves Unicode file and folder names
 (including Chinese). Directory links expand as folders; their contents load
 only when expanded.
+The Files panel also edits local text files (up to 400,000 characters; files
+on other machines stay read-only). `cmd-s` (`ctrl-s`; `files.save` in the
+`mod:files` keys section) saves, and refuses to overwrite a file that changed
+outside Herdr (a Reload button then shows the disk version). `cmd-/` (`ctrl-/`)
+comments or uncomments the selected lines of files whose type has a comment
+sign. Unsaved edits show a dot and survive switching folders; going back to the
+list asks Save, Discard or Cancel. An older `keys.json` needs
+`"mod:files": { "cmd-s": "files.save" }` added by hand.
 
 **Herdr's own layouts and mods are read-only.** They are replaced whole
 on every start. Use settings.json for look (fonts, sizes, theme, colors,
@@ -889,9 +897,11 @@ and other interactive controls too.
 `.when(cond, (el) => …)`, `.children([...])`. Controls from `gpui-base`
 (`Button`, `Checkbox`, `Switch`, `InputState` + `Input`) are unstyled: style
 them. Text: `TextView.markdown(id, text)` renders markdown; `EditorState.new({
-language, value, readonly, font_family: settings().font_family, syntax: {
+language, value, readonly, line_comment, font_family: settings().font_family, syntax: {
 keyword: theme().ansi5, ... } })` + `Editor.new(state)` is a code view (readonly)
-or editor with syntax highlighting, line numbers and folding. A viewer opens
+or editor with syntax highlighting, line numbers and folding. `line_comment` (e.g. `"#"`)
+lets `cmd-/` (`ctrl-/`) comment and uncomment the selected lines of an editable
+editor. A viewer opens
 beside the shell as a pane: `pane.split {direction, mod, props: { file }}`.
 The full surface is in `gpui-kit.d.ts` next to this file.
 
