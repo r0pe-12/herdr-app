@@ -92,6 +92,7 @@ test("Files follows directory links one level at a time", async () => {
 const kindsSource = source.slice(source.indexOf("// File kinds:"), source.indexOf("async function directory("));
 const fileKind = new Function(`${kindsSource}; return fileKind;`)();
 const displayPath = new Function(`${kindsSource}; return displayPath;`)();
+const linkTarget = new Function(`${kindsSource}; return linkTarget;`)();
 
 test("Files picks language and line comment by file name", () => {
   expect(fileKind(".env")).toEqual({ language: "env", comment: "#" });
@@ -112,13 +113,28 @@ test("Files shows a path below the folder, else from home", () => {
   expect(displayPath("/etc/hosts", "/p", "/Users/me")).toBe("/etc/hosts");
 });
 
+test("Files follows markdown links to files, here or below the remote folder", () => {
+  expect(linkTarget("docs/mods.md", "README.md", "/p", true)).toBe("/p/docs/mods.md");
+  expect(linkTarget("../defaults/AGENTS.md#keys-keysjson", "docs/mods.md", "/p", true)).toBe("/p/defaults/AGENTS.md");
+  expect(linkTarget("./a%20b.md", "/Users/me/x/n.md", "/p", true)).toBe("/Users/me/x/a b.md");
+  expect(linkTarget("/etc/hosts", "README.md", "/p", true)).toBe("/etc/hosts");
+  expect(linkTarget("../../../up.md", "docs/mods.md", "/p", true)).toBe("/up.md");
+  expect(linkTarget("docs/mods.md?plain=1", "README.md", "/p", false)).toBe("docs/mods.md");
+  expect(linkTarget("../x.md", "README.md", "/p", false)).toBe(null);
+  expect(linkTarget("/etc/hosts", "README.md", "/p", false)).toBe(null);
+  expect(linkTarget("https://herdr.dev", "README.md", "/p", true)).toBe(null);
+  expect(linkTarget("mailto:a@b.c", "README.md", "/p", true)).toBe(null);
+  expect(linkTarget("#install", "README.md", "/p", true)).toBe(null);
+  expect(linkTarget("b.md", "C:\\Users\\x\\a.md", "C:\\Users\\x", true)).toBe(null);
+});
+
 // The panel class run against fakes: a fake disk, a fake editor and a movable focused folder.
 function panel() {
   const state = { cwd: "/a", machine: null as null | string, disk: "old", release: null as null | (() => void),
-    reads: [] as [string, string | null][], writes: [] as string[], shared: {} as Record<string, unknown> };
+    reads: [] as [string, string | null][], writes: [] as string[], shared: {} as Record<string, unknown>, execs: [] as [string, string[]][] };
   const editors: any[] = [];
   const body = source.slice(source.indexOf("function location()")).replace("export default class Files extends View", "return class Files extends View");
-  const names = ["View", "div", "svg", "v_flex", "h_flex", "Editor", "EditorState", "spaces", "panes", "focused", "exec", "readTextFile", "writeTextFile", "nextCommand", "watchFolder", "theme", "settings", "window", "home", "shared", "setShared"];
+  const names = ["View", "div", "svg", "v_flex", "h_flex", "Editor", "EditorState", "TextView", "spaces", "panes", "focused", "exec", "readTextFile", "writeTextFile", "nextCommand", "watchFolder", "theme", "settings", "window", "home", "shared", "setShared"];
   const stub: Record<string, unknown> = {
     View: class {},
     EditorState: { new: ({ value }: { value: string }) => {
@@ -127,7 +143,7 @@ function panel() {
       return editor;
     } },
     spaces: () => [{ active: true, id: state.cwd, folder: state.cwd, machine: state.machine }], panes: () => [], focused: () => null,
-    exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+    exec: async (c: string, a: string[]) => { state.execs.push([c, a]); return { code: 0, stdout: "", stderr: "" }; },
     readTextFile: async (p: string, o?: { on?: string | null }) => { state.reads.push([p, o?.on ?? null]); return state.disk; },
     writeTextFile: async (p: string, value: string) => { state.writes.push(p); await new Promise<void>(r => { state.release = r; }); state.disk = value; },
     home: () => "/Users/me", shared: (k: string) => state.shared[k], setShared: (k: string, v: unknown) => { state.shared[k] = v; },
@@ -232,4 +248,39 @@ test("Files still opens a parked link when the click also moves to another folde
   await flush();
   expect(files.file).toBe("f.txt");
   expect(files.dirty).toBe(true);
+});
+
+test("Files shows markdown rendered, switches to its source and back, and follows its links", async () => {
+  const { files, cx, state, editors, flush } = panel();
+  await flush();
+  state.disk = "# Title\n[docs](docs/mods.md)";
+  files.show("README.md", cx);
+  await flush();
+  expect(files.preview).toBe(true);
+  files.togglePreview();
+  expect(files.preview).toBe(false);
+  editors.at(-1).v = "# Changed"; editors.at(-1).fire();
+  files.togglePreview();
+  expect(files.preview).toBe(true);
+  expect(files.mdText).toBe("# Changed");
+  files.followLink("./README.md#top", cx);
+  expect(files.leaving).toBe(false);
+  expect(files.code).toBe(editors.at(-1));
+  files.followLink("https://herdr.dev", cx);
+  expect(state.execs.at(-1)).toEqual(["xdg-open", ["https://herdr.dev"]]);
+  files.followLink("#install", cx);
+  expect(files.file).toBe("README.md");
+  files.followLink("docs/mods.md", cx);
+  expect(files.leaving).toBe(true);
+  expect(files.pendingOpen).toBe("/a/docs/mods.md");
+  files.leave(cx);
+  await flush();
+  expect(files.file).toBe("/a/docs/mods.md");
+  expect(files.preview).toBe(true);
+  state.disk = "plain";
+  files.show("notes.txt", cx);
+  await flush();
+  expect(files.preview).toBe(false);
+  files.togglePreview();
+  expect(files.preview).toBe(false);
 });

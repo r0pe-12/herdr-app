@@ -192,6 +192,10 @@ terminal opens it there, showing the panel if it's hidden; add Shift to open
 it with the system's app. Folders, binary files, files over 1 MiB, other URLs
 and layouts without a `files` block still go to the system. A mod asks the
 same with `setShared("files.open", { path })` (an absolute path on this computer).
+Markdown files (`.md`, `.markdown`) open rendered; Edit, or `cmd-shift-v`
+(`ctrl-shift-v`; `files.preview` in `mod:files`), switches to the source and
+back, and the rendered view shows unsaved edits. Its web and mail links open in
+the browser; links to other files open in the panel, relative to the file.
 
 **Herdr's own layouts and mods are read-only.** They are replaced whole
 on every start. Use settings.json for look (fonts, sizes, theme, colors,

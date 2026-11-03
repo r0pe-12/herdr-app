@@ -71,6 +71,7 @@
     "shift-insert": "terminal.paste"
   },
   "mod:files": {
-    "ctrl-s": "files.save"
+    "ctrl-s": "files.save",
+    "ctrl-shift-v": "files.preview"
   }
 }
