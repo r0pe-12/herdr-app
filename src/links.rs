@@ -150,7 +150,13 @@ fn file_url_path(url: &str) -> Option<PathBuf> {
             i += 1;
         }
     }
-    Some(PathBuf::from(String::from_utf8(bytes).ok()?))
+    let path = String::from_utf8(bytes).ok()?;
+    // Windows URLs put the drive after the slash: file:///C:/dir is C:/dir.
+    let drive = |p: &str| p.len() >= 2 && p.as_bytes()[0].is_ascii_alphabetic() && p.as_bytes()[1] == b':';
+    match path.strip_prefix('/') {
+        Some(rest) if cfg!(windows) && drive(rest) => Some(PathBuf::from(rest)),
+        _ => Some(PathBuf::from(path)),
+    }
 }
 
 /// Hands the target to the system (xdg-open, open on macOS, explorer on Windows).
@@ -388,7 +394,9 @@ mod tests {
         assert_eq!(local_text_file(&Target::File(binary)), None);
         assert_eq!(local_text_file(&Target::File(big)), None);
         assert_eq!(local_text_file(&Target::File(dir.join("gone.txt"))), None);
-        let url = format!("file://{}", text.to_str().unwrap().replace(' ', "%20"));
+        // RFC 8089: file:///C:/dir on Windows, file:///dir elsewhere.
+        let path = text.to_str().unwrap().replace('\\', "/").replace(' ', "%20");
+        let url = format!("file://{}{path}", if path.starts_with('/') { "" } else { "/" });
         assert_eq!(local_text_file(&Target::Url(url.clone())), Some(text.clone()));
         assert_eq!(local_text_file(&Target::Url(url.replacen("file://", "file://localhost", 1))), Some(text.clone()));
         assert_eq!(local_text_file(&Target::Url(url.replacen("file://", "file://example.com", 1))), None);
