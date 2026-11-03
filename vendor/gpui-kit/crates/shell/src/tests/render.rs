@@ -5739,6 +5739,39 @@ export default class Code extends View {
     assert!(tree.contains("changes=1"), "{tree}");
 }
 
+// HERDR: mods choose the line comment prefix that Cmd-/ (Ctrl-/) toggles.
+#[gpui::test]
+fn an_editor_takes_a_line_comment_prefix(cx: &mut TestAppContext) {
+    cx.update(|cx| crate::init(cx));
+    let runtime = ShellRuntime::new_isolated().expect("runtime");
+    cx.update(|cx| runtime.set_global(cx));
+    let source = r##"
+import { View, div } from "gpui-kit";
+import { Editor, EditorState } from "gpui-base";
+export default class Code extends View {
+  init() {
+    this.code = EditorState.new({ language: "env", value: "A=1", line_comment: "#" });
+  }
+  render(cx) {
+    return div().child(Editor.new(this.code).h(120));
+  }
+}
+"##;
+    let view_type = runtime.load_source("code", source).expect("load");
+    let window = cx.add_window(|_, _| Empty);
+    let mut context = VisualTestContext::from_window(*window.deref(), cx);
+    let object = context
+        .update(|window, cx| runtime.instantiate(&view_type, window, cx))
+        .expect("instantiate");
+    context
+        .update(|window, cx| runtime.render_to_spec(&object, None, window, cx))
+        .expect("editor render");
+    let editor = runtime.entities().first_editor().expect("editor");
+    context.update(|_, cx| {
+        assert_eq!(editor.read(cx).line_comment_prefix().as_deref(), Some("#"));
+    });
+}
+
 // HERDR: readonly rejects keyboard edits without disabling selection or programmatic refresh.
 #[gpui::test]
 fn a_readonly_script_editor_remains_selectable(cx: &mut TestAppContext) {

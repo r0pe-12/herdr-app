@@ -3164,6 +3164,8 @@ const BASE: &str = r#"  /** A row. */
       readonly?: boolean;
       /** Defaults to false. */
       soft_wrap?: boolean;
+      /** Line comment prefix, such as '#' or '//': Cmd-/ (Ctrl-/) toggles it on the selected lines. HERDR. */
+      line_comment?: string;
       /** Semantic colors: keyword, string, comment, function, type, number,
        * constant, variable, operator, punctuation, boolean, string.escape.
        * Values are concrete hex colors; unspecified UI colors follow the theme. */
