@@ -46,6 +46,8 @@ pub enum TerminalEvent {
     Ended,
     /// Right-click where the program doesn't take the mouse: the pane menu.
     ContextMenu(Point<Pixels>),
+    /// A link to a local text file was clicked: Herdr shows it itself.
+    OpenFile(std::path::PathBuf),
 }
 
 /// What the canvas closures need, shared outside the entity so prepaint can resize.
@@ -798,9 +800,10 @@ fn paste_image_bytes(format: ImageFormat, bytes: &[u8]) -> Option<(ImageFormat, 
     Some((ImageFormat::Png, std::borrow::Cow::Owned(png.into_inner())))
 }
 
+/// Cmd (Ctrl elsewhere) makes links clickable; Shift added sends a file to the system's app.
 fn link_mods(m: &Modifiers) -> bool {
     let key = if cfg!(target_os = "macos") { m.platform && !m.control } else { m.control && !m.platform };
-    key && !m.alt && !m.shift
+    key && !m.alt
 }
 
 fn local(g: &Grid, p: Point<Pixels>) -> (f32, f32) {
@@ -1494,7 +1497,11 @@ impl Render for TerminalView {
                     && let Some((target, _)) = this.link_at(ev.position)
                 {
                     match target {
-                        LinkTarget::External(target) => links::open(&target),
+                        // A text file opens in Herdr; with Shift, in the system's app.
+                        LinkTarget::External(target) => match links::local_text_file(&target).filter(|_| !ev.modifiers.shift) {
+                            Some(path) => cx.emit(TerminalEvent::OpenFile(path)),
+                            None => links::open(&target),
+                        },
                         LinkTarget::Terminal(address) => cx.emit(TerminalEvent::Peek(address)),
                     }
                     return;

@@ -83,6 +83,7 @@ actions!(
         DeleteToNextWordEnd,
         Indent,
         Outdent,
+        ToggleComment,
         IndentInline,
         OutdentInline,
         MoveUp,
@@ -295,6 +296,10 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("ctrl-z", Undo, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-y", Redo, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-/", ToggleComment, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-/", ToggleComment, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-.", ToggleCodeActions, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
@@ -4646,6 +4651,7 @@ impl<M: InputModeKind> Render for InputBaseState<M> {
                             .on_action(window.listener_for(&entity, InputBaseState::outdent_inline))
                             .on_action(window.listener_for(&entity, InputBaseState::indent_block))
                             .on_action(window.listener_for(&entity, InputBaseState::outdent_block))
+                            .on_action(window.listener_for(&entity, InputBaseState::toggle_comment))
                     })
             })
             .on_action(window.listener_for(&entity, InputBaseState::left))
@@ -10467,6 +10473,237 @@ mod tests {
         assert_cursors(&mut cx, &input, "|1\n|2\n|3");
     }
 
+    fn env_editor(cx: &mut TestAppContext) -> InputView<EditorMode> {
+        InputView::build_editor(cx, |state| state.line_comment("#"))
+    }
+
+    fn select(
+        cx: &mut VisualTestContext,
+        input: &Entity<EditorState>,
+        text: &str,
+        range: std::ops::Range<usize>,
+    ) {
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value(text, window, cx);
+                state.set_selected_range(range, cx);
+            })
+        });
+    }
+
+    fn toggle(cx: &mut VisualTestContext, input: &Entity<EditorState>) {
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.toggle_comment(&ToggleComment, window, cx)
+            })
+        });
+    }
+
+    fn text(cx: &mut VisualTestContext, input: &Entity<EditorState>) -> String {
+        input.read_with(cx, |state, _| state.text.to_string())
+    }
+
+    #[gpui::test]
+    fn toggle_comment_comments_selected_lines(cx: &mut TestAppContext) {
+        let view = env_editor(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+
+        select(&mut cx, &input, "A=1\nB=2\nC=3", 0..7);
+        toggle(&mut cx, &input);
+        assert_eq!(text(&mut cx, &input), "# A=1\n# B=2\nC=3");
+        input.read_with(&cx, |state, _| assert_eq!(state.selected_range(), 2..11));
+    }
+
+    #[gpui::test]
+    fn toggle_comment_uncomments_when_all_commented(cx: &mut TestAppContext) {
+        let view = env_editor(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+
+        select(&mut cx, &input, "# A=1\n#B=2\nC=3", 0..10);
+        toggle(&mut cx, &input);
+        assert_eq!(text(&mut cx, &input), "A=1\nB=2\nC=3");
+    }
+
+    #[gpui::test]
+    fn toggle_comment_mixed_comments_without_doubling(cx: &mut TestAppContext) {
+        let view = env_editor(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+
+        select(&mut cx, &input, "# A=1\nB=2", 0..9);
+        toggle(&mut cx, &input);
+        assert_eq!(text(&mut cx, &input), "# A=1\n# B=2");
+        toggle(&mut cx, &input);
+        assert_eq!(text(&mut cx, &input), "A=1\nB=2");
+    }
+
+    #[gpui::test]
+    fn toggle_comment_skips_blank_lines(cx: &mut TestAppContext) {
+        let view = env_editor(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+
+        select(&mut cx, &input, "A=1\n\n  \nB=2", 0..11);
+        toggle(&mut cx, &input);
+        assert_eq!(text(&mut cx, &input), "# A=1\n\n  \n# B=2");
+    }
+
+    #[gpui::test]
+    fn toggle_comment_all_blank_is_noop(cx: &mut TestAppContext) {
+        let view = env_editor(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+
+        select(&mut cx, &input, "\n\n", 0..0);
+        toggle(&mut cx, &input);
+        assert_eq!(text(&mut cx, &input), "\n\n");
+        input.read_with(&cx, |state, _| {
+            assert_eq!(state.undo_manager.undo_count(), 0)
+        });
+    }
+
+    #[gpui::test]
+    fn toggle_comment_selection_ending_at_column_zero_excludes_that_line(cx: &mut TestAppContext) {
+        let view = env_editor(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+
+        select(&mut cx, &input, "A=1\nB=2\nC=3", 0..8);
+        toggle(&mut cx, &input);
+        assert_eq!(text(&mut cx, &input), "# A=1\n# B=2\nC=3");
+    }
+
+    #[gpui::test]
+    fn toggle_comment_inserts_at_minimum_indent(cx: &mut TestAppContext) {
+        let view = InputView::build_editor(cx, |state| state.line_comment("//"));
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+
+        select(&mut cx, &input, "  a\n    b", 0..9);
+        toggle(&mut cx, &input);
+        assert_eq!(text(&mut cx, &input), "  // a\n  //   b");
+        toggle(&mut cx, &input);
+        assert_eq!(text(&mut cx, &input), "  a\n    b");
+    }
+
+    #[gpui::test]
+    fn toggle_comment_multi_cursor_is_one_undo(cx: &mut TestAppContext) {
+        let view = env_editor(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+
+        setup_cursors(&mut cx, &input, "|A=1\nB=2\n|C=3");
+        toggle(&mut cx, &input);
+        assert_cursors(&mut cx, &input, "# |A=1\nB=2\n# |C=3");
+        input.read_with(&cx, |state, _| {
+            assert_eq!(state.undo_manager.undo_count(), 1)
+        });
+        cx.update(|window, cx| input.update(cx, |state, cx| state.undo(&Undo, window, cx)));
+        assert_cursors(&mut cx, &input, "|A=1\nB=2\n|C=3");
+    }
+
+    #[gpui::test]
+    fn toggle_comment_handles_crlf(cx: &mut TestAppContext) {
+        let view = env_editor(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+
+        select(&mut cx, &input, "A=1\r\n\r\nB=2\r\n", 0..12);
+        toggle(&mut cx, &input);
+        assert_eq!(text(&mut cx, &input), "# A=1\r\n\r\n# B=2\r\n");
+        toggle(&mut cx, &input);
+        assert_eq!(text(&mut cx, &input), "A=1\r\n\r\nB=2\r\n");
+    }
+
+    mod comment_fallthrough {
+        use super::*;
+        use gpui::KeyBinding;
+        use std::cell::Cell;
+
+        gpui::actions!(test_comment, [Fallback]);
+
+        struct Root {
+            editor: Entity<EditorState>,
+            hit: Rc<Cell<bool>>,
+        }
+
+        impl Render for Root {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let hit = self.hit.clone();
+                div()
+                    .size_full()
+                    .key_context("Root")
+                    .on_action(cx.listener(move |_, _: &Fallback, _, _| hit.set(true)))
+                    .child(self.editor.clone())
+            }
+        }
+
+        /// Presses the comment shortcut in a focused editor under a host that
+        /// binds the same key. Returns the editor text and whether the host got it.
+        fn press(
+            cx: &mut TestAppContext,
+            prefix: Option<&'static str>,
+            readonly: bool,
+        ) -> (String, bool) {
+            let key = if cfg!(target_os = "macos") {
+                "cmd-/"
+            } else {
+                "ctrl-/"
+            };
+            let hit = Rc::new(Cell::new(false));
+            let mut editor = None;
+            let window = cx.update(|cx| {
+                cx.open_window(Default::default(), |window, cx| {
+                    cx.set_global(Theme::default());
+                    super::super::super::init(cx);
+                    cx.bind_keys([KeyBinding::new(key, Fallback, Some("Root"))]);
+                    let state = cx.new(|cx| {
+                        let mut state = EditorState::new(window, cx).default_value("A=1");
+                        if let Some(prefix) = prefix {
+                            state = state.line_comment(prefix);
+                        }
+                        state
+                    });
+                    editor = Some(state.clone());
+                    cx.new(|_| Root {
+                        editor: state,
+                        hit: hit.clone(),
+                    })
+                })
+                .unwrap()
+            });
+            let editor = editor.unwrap();
+            let mut cx = VisualTestContext::from_window(window.into(), cx);
+            cx.update(|window, cx| {
+                editor.update(cx, |state, cx| {
+                    state.set_readonly(readonly, cx);
+                    state.focus(window, cx);
+                })
+            });
+            cx.run_until_parked();
+            cx.simulate_keystrokes(key);
+            cx.run_until_parked();
+            (
+                editor.read_with(&cx, |state, _| state.text.to_string()),
+                hit.get(),
+            )
+        }
+
+        #[gpui::test]
+        fn toggle_comment_falls_through_without_prefix_or_when_readonly(cx: &mut TestAppContext) {
+            let (text, hit) = press(cx, None, false);
+            assert_eq!((text.as_str(), hit), ("A=1", true), "no line_comment");
+
+            let (text, hit) = press(cx, Some("#"), true);
+            assert_eq!((text.as_str(), hit), ("A=1", true), "readonly");
+
+            let (text, hit) = press(cx, Some("#"), false);
+            assert_eq!((text.as_str(), hit), ("# A=1", false), "editable");
+        }
+    }
+
     #[gpui::test]
     fn test_multi_cursor_indent_then_outdent_roundtrips(cx: &mut TestAppContext) {
         let view = multi_line(cx);
@@ -11335,5 +11572,23 @@ impl InputBaseState<crate::input::EditorMode> {
     pub fn set_smart_indent(&mut self, smart_indent: bool, _: &mut Window, cx: &mut Context<Self>) {
         self.mode.set_smart_indent(smart_indent);
         cx.notify();
+    }
+
+    /// Set the line comment prefix (for example `"#"` or `"//"`) that
+    /// [`ToggleComment`] adds to and removes from the selected lines.
+    ///
+    /// An empty prefix means no line comments: the shortcut then goes to the
+    /// host instead.
+    /// Default: none
+    pub fn line_comment(mut self, prefix: impl Into<SharedString>) -> Self {
+        let prefix: SharedString = prefix.into();
+        self.mode
+            .set_line_comment((!prefix.is_empty()).then_some(prefix));
+        self
+    }
+
+    /// The line comment prefix, if the editor has one.
+    pub fn line_comment_prefix(&self) -> Option<SharedString> {
+        self.mode.line_comment()
     }
 }

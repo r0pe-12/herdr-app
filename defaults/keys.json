@@ -69,5 +69,9 @@
     "ctrl-v": "terminal.paste_image",
     "ctrl-insert": "terminal.copy",
     "shift-insert": "terminal.paste"
+  },
+  "mod:files": {
+    "ctrl-s": "files.save",
+    "ctrl-shift-v": "files.preview"
   }
 }

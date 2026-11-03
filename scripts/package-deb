@@ -1,0 +1,81 @@
+#!/bin/bash
+# Builds this fork for Linux and packs it for Debian and Ubuntu:
+#
+#   scripts/package-deb   -> dist/herdr-app_<version>+fork.<commit>_<arch>.deb
+#
+# A build from source: it never updates itself (no HERDR_APP_RELEASE), so the
+# fork's changes stay, and it sends no telemetry. No core inside: Herdr offers
+# to install herdr-core when it's missing, as the release does.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+[[ $(uname -s) == Linux ]] || { echo 'package-deb: build this on Linux.' >&2; exit 1; }
+command -v dpkg-deb >/dev/null || { echo 'package-deb: needs dpkg-deb (Debian or Ubuntu).' >&2; exit 1; }
+for notice in LICENSE THIRD-PARTY-NOTICES; do
+  [[ -s $notice ]] || { echo "package-deb: $notice is missing or empty" >&2; exit 1; }
+done
+
+version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)+fork.$(git rev-parse --short HEAD)"
+arch=$(dpkg --print-architecture)
+echo "package-deb: herdr-app $version for $arch"
+cargo build --release --locked
+bin=target/release/herdr-app
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+root="$work/herdr-app"
+install -Dm755 "$bin" "$root/usr/bin/herdr-app"
+install -Dm644 assets/icons/herdr-ui-icon-clean.svg "$root/usr/share/icons/hicolor/scalable/apps/herdr-app.svg"
+install -Dm644 LICENSE "$root/usr/share/doc/herdr-app/copyright"
+install -Dm644 THIRD-PARTY-NOTICES "$root/usr/share/doc/herdr-app/THIRD-PARTY-NOTICES"
+mkdir -p "$root/usr/share/applications"
+cat > "$root/usr/share/applications/herdr-app.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Herdr
+Comment=Terminals and coding agents that keep running
+Exec=/usr/bin/herdr-app
+Icon=herdr-app
+Terminal=false
+Categories=Development;
+StartupWMClass=herdr-app
+EOF
+
+# The packages owning the libraries it links, plus the ones GPUI opens at run
+# time (Vulkan, keyboard maps, Wayland), which ldd doesn't show.
+deps=$(
+  {
+    for lib in $(ldd "$bin" | awk '$3 ~ /^\// {print $3}'); do
+      owner=$(dpkg -S "$lib" 2>/dev/null || dpkg -S "$(readlink -f "$lib")" 2>/dev/null || true)
+      [[ -n $owner ]] && echo "${owner%%:*}"
+    done
+    printf '%s\n' libvulkan1 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libxcb1 libfontconfig1 libfreetype6
+  } | sort -u | paste -sd, - | sed 's/,/, /g'
+)
+
+mkdir -p "$root/DEBIAN"
+cat > "$root/DEBIAN/control" <<EOF
+Package: herdr-app
+Version: $version
+Architecture: $arch
+Maintainer: r0pe-12 <103515806+r0pe-12@users.noreply.github.com>
+Installed-Size: $(du -sk "$root/usr" | cut -f1)
+Depends: $deps
+Recommends: mesa-vulkan-drivers
+Section: devel
+Priority: optional
+Homepage: https://github.com/r0pe-12/herdr-app
+Description: Herdr, a desktop app for terminals and coding agents (fork)
+ Keep work in spaces, see which agents need you, and leave terminals running
+ when you close the window. In this fork the Files panel edits local files
+ (Ctrl-S saves, Ctrl-/ comments lines) and shows Markdown rendered.
+ .
+ Herdr offers to install herdr-core, which runs the terminals, when it's missing.
+EOF
+
+mkdir -p dist
+out="dist/herdr-app_${version}_${arch}.deb"
+dpkg-deb --build --root-owner-group "$root" "$out"
+dpkg-deb --info "$out"
+dpkg-deb --contents "$out"
+echo "package-deb: $out"

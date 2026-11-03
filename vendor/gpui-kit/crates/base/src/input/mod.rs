@@ -19,6 +19,8 @@ pub(crate) mod blink_cursor;
 mod change;
 #[path = "base/cursor.rs"]
 mod cursor;
+#[path = "editor/comment.rs"]
+mod comment;
 #[path = "editor/decorations.rs"]
 mod decorations;
 #[path = "editor/diagnostics.rs"]

@@ -181,6 +181,7 @@ pub(crate) struct EditorOptions {
     pub folding: bool,
     pub readonly: bool,
     pub soft_wrap: bool,
+    pub line_comment: Option<String>,
     pub syntax: HashMap<String, String>,
     pub font_family: Option<String>,
     pub font_size: Option<f32>,
@@ -195,6 +196,7 @@ impl Default for EditorOptions {
             folding: true,
             readonly: false,
             soft_wrap: false,
+            line_comment: None,
             syntax: HashMap::new(),
             font_family: None,
             font_size: None,
@@ -461,6 +463,9 @@ impl EntityStore {
                 .line_number(options.line_numbers)
                 .folding(options.folding)
                 .soft_wrap(options.soft_wrap);
+            if let Some(prefix) = options.line_comment {
+                state = state.line_comment(prefix);
+            }
             state.set_readonly(options.readonly, cx);
             state.set_editor_style(style);
             state.set_highlighter_factory(

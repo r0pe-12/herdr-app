@@ -2,7 +2,7 @@ use crate::input::InputModeKind;
 use std::rc::Rc;
 use std::{cell::RefCell, ops::Range};
 
-use gpui::{Context, Window};
+use gpui::{Context, SharedString, Window};
 use ropey::Rope;
 
 use super::DisplayMap;
@@ -51,6 +51,8 @@ pub(crate) enum LayoutMode {
         auto_closed_pairs: super::auto_close::AutoClosedPairs,
         auto_close: bool,
         smart_indent: bool,
+        /// Line comment prefix toggled by `ToggleComment`; `None` disables it.
+        line_comment: Option<SharedString>,
     },
 }
 
@@ -87,6 +89,7 @@ impl LayoutMode {
             auto_closed_pairs: Default::default(),
             auto_close: true,
             smart_indent: true,
+            line_comment: None,
         }
     }
 
@@ -145,6 +148,19 @@ impl LayoutMode {
                 ..
             }
         )
+    }
+
+    pub(super) fn line_comment(&self) -> Option<SharedString> {
+        match self {
+            Self::CodeEditor { line_comment, .. } => line_comment.clone(),
+            _ => None,
+        }
+    }
+
+    pub(super) fn set_line_comment(&mut self, prefix: Option<SharedString>) {
+        if let Self::CodeEditor { line_comment, .. } = self {
+            *line_comment = prefix;
+        }
     }
 
     pub(super) fn set_auto_close(&mut self, enabled: bool) {
@@ -459,6 +475,7 @@ mod tests {
             auto_closed_pairs: Default::default(),
             auto_close: false,
             smart_indent: false,
+            line_comment: None,
         };
         assert_eq!(mode.line_number(), false);
         assert_eq!(mode.has_indent_guides(), false);

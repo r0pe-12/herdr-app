@@ -1,4 +1,4 @@
-# Herdr app
+`# Herdr app
 
 <!-- Written by the Herdr app on every start. Edits here are overwritten. -->
 
@@ -179,6 +179,23 @@ writing a new file. The Files panel supports Windows folder paths with spaces,
 parentheses and apostrophes, and preserves Unicode file and folder names
 (including Chinese). Directory links expand as folders; their contents load
 only when expanded.
+The Files panel also edits local text files (up to 400,000 characters; files
+on other machines stay read-only). `cmd-s` (`ctrl-s`; `files.save` in the
+`mod:files` keys section) saves, and refuses to overwrite a file that changed
+outside Herdr (a Reload button then shows the disk version). `cmd-/` (`ctrl-/`)
+comments or uncomments the selected lines of files whose type has a comment
+sign. Unsaved edits show a dot and survive switching folders; going back to the
+list asks Save, Discard or Cancel. An older `keys.json` needs
+`"mod:files": { "cmd-s": "files.save" }` added by hand.
+Cmd-click (Ctrl-click) on a path or `file://` link to a local text file in a
+terminal opens it there, showing the panel if it's hidden; add Shift to open
+it with the system's app. Folders, binary files, files over 1 MiB, other URLs
+and layouts without a `files` block still go to the system. A mod asks the
+same with `setShared("files.open", { path })` (an absolute path on this computer).
+Markdown files (`.md`, `.markdown`) open rendered; Edit, or `cmd-shift-v`
+(`ctrl-shift-v`; `files.preview` in `mod:files`), switches to the source and
+back, and the rendered view shows unsaved edits. Its web and mail links open in
+the browser; links to other files open in the panel, relative to the file.
 
 **Herdr's own layouts and mods are read-only.** They are replaced whole
 on every start. Use settings.json for look (fonts, sizes, theme, colors,
@@ -889,9 +906,11 @@ and other interactive controls too.
 `.when(cond, (el) => …)`, `.children([...])`. Controls from `gpui-base`
 (`Button`, `Checkbox`, `Switch`, `InputState` + `Input`) are unstyled: style
 them. Text: `TextView.markdown(id, text)` renders markdown; `EditorState.new({
-language, value, readonly, font_family: settings().font_family, syntax: {
+language, value, readonly, line_comment, font_family: settings().font_family, syntax: {
 keyword: theme().ansi5, ... } })` + `Editor.new(state)` is a code view (readonly)
-or editor with syntax highlighting, line numbers and folding. A viewer opens
+or editor with syntax highlighting, line numbers and folding. `line_comment` (e.g. `"#"`)
+lets `cmd-/` (`ctrl-/`) comment and uncomment the selected lines of an editable
+editor. A viewer opens
 beside the shell as a pane: `pane.split {direction, mod, props: { file }}`.
 The full surface is in `gpui-kit.d.ts` next to this file.
 

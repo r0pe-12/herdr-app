@@ -1400,6 +1400,7 @@ impl AppWindow {
             let (block, addr) = (id.clone(), address.clone());
             let sub = cx.subscribe_in(&view, window, move |this, _, ev: &TerminalEvent, window, cx| match ev {
                 TerminalEvent::Peek(address) => this.peek_terminal(address, window, cx),
+                TerminalEvent::OpenFile(path) => this.open_file(path.clone(), window, cx),
                 TerminalEvent::TitleChanged => this.publish(cx),
                 TerminalEvent::Ended => this.terminal_ended(&block, window, cx),
                 TerminalEvent::ContextMenu(at) => {
@@ -3516,6 +3517,20 @@ impl AppWindow {
             self.publish_shown_copies();
         }
         cx.notify();
+    }
+
+    /// Shows a clicked text file in the layout's Files panel (revealing it), or
+    /// hands it to the system when the shown layout has none.
+    fn open_file(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(steps) = self.chrome.reveal_mod("files") else {
+            crate::links::open(&crate::links::Target::File(path));
+            return;
+        };
+        for (name, args) in steps {
+            self.run(name, args, window, cx);
+        }
+        // The files mod takes the request and clears it.
+        mods::set_shared("files.open".into(), json!({ "path": path }));
     }
 
     fn peek_terminal(&mut self, address: &str, window: &mut Window, cx: &mut Context<Self>) {
